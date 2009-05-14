@@ -4,6 +4,7 @@ use ExtUtils::MakeMaker;
 WriteMakefile(
     NAME              => 'PAR::Repository::Query',
     VERSION_FROM      => 'lib/PAR/Repository/Query.pm', # finds $VERSION
+    LICENSE => 'perl',
     PREREQ_PM         => {
 #'perl'      => '5.6',
 		'version' => '0.50',

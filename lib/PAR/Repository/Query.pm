@@ -6,7 +6,7 @@ use warnings;
 
 use Carp qw/croak/;
 
-our $VERSION = '0.12';
+our $VERSION = '0.14';
 
 =head1 NAME
 
@@ -118,23 +118,22 @@ sub query_module {
       if defined $arch_regex and not ref($arch_regex) eq 'Regexp';
     
     # iterate over all modules in the mod_dbm hash
-    foreach my $mod_name (keys %$modh) {
+    while (my ($mod_name, $dists) = each(%$modh)) {
         # skip non-matching
         next if $mod_name !~ $regex;
         
-        # get the distributions for the module
-        my $dists = $modh->{$mod_name};
-
         if (defined $arch_regex) {
-            foreach my $distname (keys %$dists) {
+            while (my ($distname, $version) = each(%$dists)) {
                 (undef, undef, my $arch, undef)
                   = PAR::Dist::parse_dist_name($distname);
                 next if $arch !~ $arch_regex;
-                push @modules, [$distname, $dists->{$distname}];
+                push @modules, [$distname, $version];
             }
         }
         else {
-            push @modules, [$_, $dists->{$_}] foreach keys %$dists;
+            while (my ($distname, $version) = each(%$dists)) {
+                push @modules, [$distname, $version];
+            }
         }
     }
     
@@ -149,6 +148,10 @@ sub query_module {
 }
 
 =head2 query_script
+
+Note: Usually, you probably want to use C<query_script_hash()>
+instead. The usage of both methods is very similar (and described
+right below), but the data structure returned differes somewhat.
 
 Polls the repository for scripts matching certain criteria.
 Takes named arguments. Either a C<regex> or a C<name> parameter
@@ -192,7 +195,45 @@ Always interpreted as a regular expression.
 sub query_script {
     my $self = shift;
 #    $self->verbose(2, "Entering query_script()");
-    croak("query_script() called with uneven number of arguments.")
+
+    my $scripts = $self->query_script_hash(@_);
+
+    my %seen;
+    # sort return list alphabetically
+    return [
+        map  { @$_ }
+        sort { $a->[0] cmp $b->[0] }
+        grep { not $seen{$_->[0] . '|' . $_->[1]}++ }
+        map  {
+          my $scripthash = $scripts->{$_};
+          map { [$_, $scripthash->{$_}] } keys %$scripthash;
+        }
+        keys %$scripts
+    ];
+}
+
+
+=head2 query_script_hash
+
+Works exactly the same as C<query_script> except it returns
+a different resulting structure which includes the matching
+script's name:
+
+  { 'fooscript' => { 'Foo-Bar-0.01-any_arch-5.8.7.par' => '0.01', ... }, ... }
+
+that means the script C<fooscript> was found in the distribution
+F<Foo-Bar-0.01-any_arch-5.8.7.par> and the copy in that file has version
+0.01.
+
+Parameters are the same as for C<query_script>
+
+=cut
+
+# FIXME: factor out common code from query_script_hash and query_module!
+sub query_script_hash {
+    my $self = shift;
+#    $self->verbose(2, "Entering query_script_hash()");
+    croak("query_script() or query_script_hash() called with uneven number of arguments.")
       if @_ % 2;
     my %args = @_;
     
@@ -200,10 +241,10 @@ sub query_script {
     my $regex = $args{regex};
 
     if (defined $name and defined $regex) {
-        croak("query_script() accepts only one of 'name' and 'regex' parameters.");
+        croak("query_script() or query_script_hash() accepts only one of 'name' and 'regex' parameters.");
     }
     elsif (not defined $name and not defined $regex) {
-        croak("query_script() needs one of 'name' and 'regex' parameters.");
+        croak("query_script() or query_script_hash() needs one of 'name' and 'regex' parameters.");
     }
     elsif (defined $name) {
         $regex = qr/^\Q$name\E$/;
@@ -215,42 +256,31 @@ sub query_script {
     my ($scrh, $scrfile) = $self->scripts_dbm
       or die("Could not get scripts DBM.");
 
-    my @scripts;
+    my %scripts;
     
     my $arch_regex = $args{arch};
     $arch_regex = qr/$arch_regex/
       if defined $arch_regex and not ref($arch_regex) eq 'Regexp';
     
     # iterate over all scripts in the scripts hash
-    foreach my $scr_name (keys %$scrh) {
+    while (my ($scr_name, $dists) = each(%$scrh)) {
         # skip non-matching
         next if $scr_name !~ $regex;
         
-        # get the distributions for the module
-        my $dists = $scrh->{$scr_name};
-
-        if (defined $arch_regex) {
-            foreach my $distname (keys %$dists) {
+        while (my ($distname, $version) = each(%$dists)) {
+            if (defined $arch_regex) {
                 (undef, undef, my $arch, undef)
                   = PAR::Dist::parse_dist_name($distname);
                 next if $arch !~ $arch_regex;
-                push @scripts, [$distname, $dists->{$distname}];
             }
-        }
-        else {
-            push @scripts, [$_, $dists->{$_}] foreach keys %$dists;
+            $scripts{$scr_name} = {} if not exists $scripts{$scr_name};
+            $scripts{$scr_name}{$distname} = $version; # distname => version
         }
     }
-    
-    my %seen;
-    # sort return list alphabetically
-    return [
-        map  { @$_ }
-        sort { $a->[0] cmp $b->[0] }
-        grep { not $seen{$_->[0] . '|' . $_->[1]}++ }
-        @scripts
-    ];
+
+    return \%scripts;    
 }
+
 
 
 =head2 query_dist
@@ -332,12 +362,11 @@ sub query_dist {
       if defined $arch_regex and not ref($arch_regex) eq 'Regexp';
     
     # iterate over all modules in the mod_dbm hash
-    foreach my $mod_name (keys %$modh) {
-        
+    while (my ($mod_name, $this_dists) = each(%$modh)) {
         # get the distributions for the module
         my $this_dists = $modh->{$mod_name};
         
-        foreach my $dist_name (keys %$this_dists) {
+        while (my ($dist_name, $dist) = each(%$this_dists)) {
             # skip non-matching
             next if $dist_name !~ $regex;
             
@@ -348,7 +377,7 @@ sub query_dist {
                 next if $arch !~ $arch_regex;
             }
             
-            $dists{$dist_name}{$mod_name} = $this_dists->{$dist_name};
+            $dists{$dist_name}{$mod_name} = $dist;
         }
     }
     
@@ -372,7 +401,7 @@ Steffen Müller, E<lt>smueller@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2006 by Steffen Müller
+Copyright (C) 2006-2009 by Steffen Müller
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.6 or,
